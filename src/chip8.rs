@@ -24,7 +24,7 @@ const FONT: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-const IBM_LOGO: [u8; 132] = [
+pub const IBM_LOGO: [u8; 132] = [
     0x00, 0xe0, 0xa2, 0x2a, 0x60, 0x0c, 0x61, 0x08, 0xd0, 0x1f, 0x70, 0x09, 0xa2, 0x39, 0xd0, 0x1f,
     0xa2, 0x48, 0x70, 0x08, 0xd0, 0x1f, 0x70, 0x04, 0xa2, 0x57, 0xd0, 0x1f, 0x70, 0x08, 0xa2, 0x66,
     0xd0, 0x1f, 0x70, 0x08, 0xa2, 0x75, 0xd0, 0x1f, 0x12, 0x28, 0xff, 0x00, 0xff, 0x00, 0x3c, 0x00,
@@ -43,9 +43,9 @@ const FONT_OFFSET: usize = 0x050;
 const LOAD_START: usize = 0x200;
 
 #[derive(Debug)]
-struct Chip8 {
+pub struct Chip8 {
     memory: [u8; MEMORY_SIZE],
-    display: [[bool; W_WIDTH]; W_HEIGHT],
+    pixels: [[bool; W_WIDTH]; W_HEIGHT],
     pc: usize,
     i_register: u16,
     v_registers: [u8; 16],
@@ -57,37 +57,15 @@ struct Chip8 {
 #[derive(Debug)]
 struct Instruction(u16, u16, u16, u16);
 
+#[derive(PartialEq)]
+pub enum Target {
+    Memory,
+    Pixels,
+}
+
+// private method
 impl Chip8 {
-    pub fn new() -> Self {
-        let mut memory = [0; 4096];
-        // Fill font in memory
-        for (pos, &b) in FONT.iter().enumerate() {
-            memory[FONT_OFFSET + pos] = b;
-        }
-
-        Self {
-            memory,
-            display: [[false; W_WIDTH]; W_HEIGHT],
-            pc: LOAD_START,
-            i_register: 0u16,
-            v_registers: [0u8; 16],
-            // let mut stack: Vec<u16> = vec![];
-            // let mut delay_timer: u8 = 0u8;
-            // let mut sound_time: u8 = 0u8;
-        }
-    }
-
-    pub fn load<I>(&mut self, instructions: I)
-    where
-        I: Iterator<Item = u8>,
-    {
-        // Fill with chip 8 instrucitons
-        for (pos, b) in instructions.enumerate() {
-            self.memory[LOAD_START + pos] = b;
-        }
-    }
-
-    pub fn fetch(&mut self) -> Instruction {
+    fn fetch(&mut self) -> Instruction {
         //fetch
         let instruction: u16 =
             ((self.memory[self.pc] as u16) << 8) | (self.memory[self.pc + 1] as u16);
@@ -102,28 +80,76 @@ impl Chip8 {
         Instruction(nibble_1, nibble_2, nibble_3, nibble_4)
     }
 
-    pub fn execute(&mut self, instruction: &Instruction) {
+    fn execute(&mut self, instruction: &Instruction) {
         // Execute
         match *instruction {
-            Instruction(0, 0, 0xe, 0) => self.display = [[false; W_WIDTH]; W_HEIGHT],
+            Instruction(0, 0, 0xe, 0) => self.pixels = [[false; W_WIDTH]; W_HEIGHT],
             Instruction(1, n2, n3, n4) => self.pc = ((n2 << 8) | (n3 << 4) | n4) as usize,
             Instruction(6, x, n3, n4) => self.v_registers[x as usize] = ((n3 << 4) | n4) as u8,
             Instruction(7, x, n3, n4) => self.v_registers[x as usize] += ((n3 << 4) | n4) as u8,
             Instruction(0xa, n2, n3, n4) => self.i_register = (n2 << 8) | (n3 << 4) | n4,
-            Instruction(0xd, x, y, n) => draw(
-                &mut self.display,
-                &self.memory,
-                self.i_register,
-                self.v_registers[x as usize],
-                self.v_registers[y as usize],
-                n,
-                &mut self.v_registers[0xf],
-            ),
+            Instruction(0xd, x, y, n) => self.draw(x, y, n),
             _ => panic!("Unknow instruction {:?}", instruction),
         };
     }
 
-    pub fn step(&mut self) {
+    fn draw(&mut self, x: u16, y: u16, n: u16) {
+        // Modulo coordinates to stay in range
+        let x = (self.v_registers[x as usize] & 63) as usize;
+        let y = (self.v_registers[y as usize] & 31) as usize;
+        let i = self.i_register;
+
+        self.v_registers[0xf] = 0;
+
+        for row in 0..usize::from(n) {
+            let sprite = self.memory[usize::from(i) + row];
+            for col in 0..8 {
+                let (c_x, c_y) = (x + col, y + row);
+                if (c_y < W_HEIGHT) && (c_x < W_WIDTH) {
+                    let d_pixel = self.pixels[c_y][c_x];
+                    let s_pixel = (((0x80 >> col) & sprite) >> (7 - col)) != 0;
+                    if d_pixel && s_pixel {
+                        self.v_registers[0xf] = 1;
+                    }
+                    self.pixels[c_y][c_x] = d_pixel ^ s_pixel;
+                }
+            }
+        }
+    }
+}
+
+// public method
+impl Chip8 {
+    pub fn new() -> Self {
+        let mut memory = [0; 4096];
+        // Fill font in memory
+        for (pos, &b) in FONT.iter().enumerate() {
+            memory[FONT_OFFSET + pos] = b;
+        }
+
+        Self {
+            memory,
+            pixels: [[false; W_WIDTH]; W_HEIGHT],
+            pc: LOAD_START,
+            i_register: 0u16,
+            v_registers: [0u8; 16],
+            // let mut stack: Vec<u16> = vec![];
+            // let mut delay_timer: u8 = 0u8;
+            // let mut sound_time: u8 = 0u8;
+        }
+    }
+
+    pub fn pixels(&self) -> Vec<bool> {
+        self.pixels.into_iter().flatten().collect()
+    }
+    pub fn load(&mut self, instructions: &[u8]) {
+        // Fill with chip 8 instrucitons
+        for (pos, &b) in instructions.iter().enumerate() {
+            self.memory[LOAD_START + pos] = b;
+        }
+    }
+
+    pub fn step(&mut self) -> Target {
         let start = Instant::now();
         let instruction = self.fetch();
         let _ = self.execute(&instruction);
@@ -161,55 +187,10 @@ impl Chip8 {
         while start.elapsed() < interval {
             spin_loop()
         }
-    }
-}
 
-fn draw(
-    display: &mut [[bool; W_WIDTH]; W_HEIGHT],
-    memory: &[u8; MEMORY_SIZE],
-    i: u16,
-    x: u8,
-    y: u8,
-    n: u16,
-    flag: &mut u8,
-) {
-    let x = (x & 63) as usize;
-    let y = (y & 31) as usize;
-    *flag = 0;
-
-    for row in 0..usize::from(n) {
-        let sprite = memory[usize::from(i) + row];
-        for col in 0..8 {
-            let (c_x, c_y) = (x + col, y + row);
-            if (c_y < W_HEIGHT) && (c_x < W_WIDTH) {
-                let d_pixel = display[c_y][c_x];
-                let s_pixel = (((0x80 >> col) & sprite) >> (7 - col)) != 0;
-                if d_pixel && s_pixel {
-                    *flag = 1;
-                }
-                display[c_y][c_x] = d_pixel ^ s_pixel;
-            }
+        match instruction {
+            Instruction(0xd, ..) | Instruction(0, 0, 0xe, 0) => Target::Pixels,
+            _ => Target::Memory,
         }
-    }
-
-    println!(
-        "{}",
-        display
-            .iter()
-            .map(|&row| format!(
-                "{}\n",
-                row.iter()
-                    .map(|&p| if p { "#" } else { " " })
-                    .collect::<String>()
-            ))
-            .collect::<String>()
-    );
-}
-
-pub fn run() {
-    let mut chip = Chip8::new();
-    chip.load(IBM_LOGO.into_iter());
-    loop {
-        chip.step();
     }
 }
