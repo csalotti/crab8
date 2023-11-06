@@ -49,7 +49,7 @@ pub struct Chip8 {
     pc: usize,
     i_register: u16,
     v_registers: [u8; 16],
-    // let mut stack: Vec<u16> = vec![];
+    stack: Vec<usize>,
     // let mut delay_timer: u8 = 0u8;
     // let mut sound_time: u8 = 0u8;
 }
@@ -61,6 +61,24 @@ struct Instruction(u16, u16, u16, u16);
 pub enum Target {
     Memory,
     Pixels,
+}
+
+impl From<&Instruction> for u8 {
+    fn from(instruction: &Instruction) -> u8 {
+        ((instruction.2 << 4) | instruction.3) as u8
+    }
+}
+
+impl From<&Instruction> for u16 {
+    fn from(instruction: &Instruction) -> u16 {
+        (instruction.1 << 8) | (instruction.2 << 4) | instruction.3
+    }
+}
+
+impl From<&Instruction> for usize {
+    fn from(instruction: &Instruction) -> usize {
+        ((instruction.1 << 8) | (instruction.2 << 4) | instruction.3) as usize
+    }
 }
 
 // private method
@@ -84,10 +102,51 @@ impl Chip8 {
         // Execute
         match *instruction {
             Instruction(0, 0, 0xe, 0) => self.pixels = [[false; W_WIDTH]; W_HEIGHT],
-            Instruction(1, n2, n3, n4) => self.pc = ((n2 << 8) | (n3 << 4) | n4) as usize,
-            Instruction(6, x, n3, n4) => self.v_registers[x as usize] = ((n3 << 4) | n4) as u8,
-            Instruction(7, x, n3, n4) => self.v_registers[x as usize] += ((n3 << 4) | n4) as u8,
-            Instruction(0xa, n2, n3, n4) => self.i_register = (n2 << 8) | (n3 << 4) | n4,
+            Instruction(0, 0, 0xe, 0xe) => self.pc = self.stack.pop().unwrap(),
+            Instruction(1, ..) => self.pc = usize::from(instruction),
+            Instruction(2, ..) => {
+                self.stack.push(self.pc);
+                self.pc = usize::from(instruction)
+            }
+            Instruction(3, x, ..) => {
+                if self.v_registers[x as usize] == u8::from(instruction) {
+                    self.pc += 2
+                }
+            }
+            Instruction(4, x, ..) => {
+                if self.v_registers[x as usize] != u8::from(instruction) {
+                    self.pc += 2
+                }
+            }
+            Instruction(5, x, y, ..) => {
+                if self.v_registers[x as usize] == self.v_registers[y as usize] {
+                    self.pc += 2
+                }
+            }
+            Instruction(6, x, ..) => self.v_registers[x as usize] = u8::from(instruction),
+            Instruction(7, x, ..) => self.v_registers[x as usize] += u8::from(instruction),
+            Instruction(8, x, y, 0) => self.v_registers[x as usize] = self.v_registers[y as usize],
+            Instruction(8, x, y, 1) => self.v_registers[x as usize] |= self.v_registers[y as usize],
+            Instruction(8, x, y, 2) => self.v_registers[x as usize] &= self.v_registers[y as usize],
+            Instruction(8, x, y, 3) => self.v_registers[x as usize] ^= self.v_registers[y as usize],
+            Instruction(8, x, y, 4) => {
+                let result =
+                    (self.v_registers[x as usize] as u16) + (self.v_registers[y as usize] as u16);
+                self.v_registers[0xf as usize] = (result > 255) as u8;
+                self.v_registers[x as usize] = (result & 255) as u8;
+            }
+            Instruction(8, x, y, 5 | 7) => {
+                self.v_registers[x as usize] = self.v_registers[y as usize]
+            }
+            Instruction(8, x, y, 6 | 0xe) => {
+                self.v_registers[x as usize] = self.v_registers[y as usize]
+            }
+            Instruction(9, x, y, ..) => {
+                if self.v_registers[x as usize] != self.v_registers[y as usize] {
+                    self.pc += 2
+                }
+            }
+            Instruction(0xa, ..) => self.i_register = u16::from(instruction),
             Instruction(0xd, x, y, n) => self.draw(x, y, n),
             _ => panic!("Unknow instruction {:?}", instruction),
         };
@@ -133,7 +192,7 @@ impl Chip8 {
             pc: LOAD_START,
             i_register: 0u16,
             v_registers: [0u8; 16],
-            // let mut stack: Vec<u16> = vec![];
+            stack: vec![],
             // let mut delay_timer: u8 = 0u8;
             // let mut sound_time: u8 = 0u8;
         }
