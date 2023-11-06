@@ -36,7 +36,7 @@ pub const IBM_LOGO: [u8; 132] = [
     0x00, 0xe0, 0x00, 0xe0,
 ];
 pub const W_HEIGHT: usize = 32;
-pub const W_WIDTH: usize = 65;
+pub const W_WIDTH: usize = 64;
 
 const MEMORY_SIZE: usize = 4096;
 const FONT_OFFSET: usize = 0x050;
@@ -139,8 +139,11 @@ impl Chip8 {
         }
     }
 
-    pub fn pixels(&self) -> Vec<bool> {
-        self.pixels.into_iter().flatten().collect()
+    pub fn pixels(&self) -> Vec<Vec<bool>> {
+        self.pixels
+            .into_iter()
+            .map(|row| row.into_iter().collect())
+            .collect()
     }
     pub fn load(&mut self, instructions: &[u8]) {
         // Fill with chip 8 instrucitons

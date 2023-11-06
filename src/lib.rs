@@ -11,8 +11,11 @@ use winit::{
     window::WindowBuilder,
 };
 
-pub fn run() -> Result<(), impl std::error::Error> {
-    let (w_height, w_width) = (W_HEIGHT as u32, W_WIDTH as u32);
+pub fn run(scaling_factor: usize) -> Result<(), impl std::error::Error> {
+    let (w_height, w_width) = (
+        (W_HEIGHT * scaling_factor) as u32,
+        (W_WIDTH * scaling_factor) as u32,
+    );
 
     let event_loop = EventLoop::new().unwrap();
 
@@ -44,7 +47,7 @@ pub fn run() -> Result<(), impl std::error::Error> {
                         } => elwt.exit(),
                         WindowEvent::RedrawRequested => {
                             // Notify the windowing system that we'll be presenting to the window.
-                            match render.render(&chip.pixels()) {
+                            match render.render(chip.pixels()) {
                                 Ok(_) => {}
                                 Err(wgpu::SurfaceError::Lost) => render.resize(*render.size()),
                                 Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),

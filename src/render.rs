@@ -112,7 +112,7 @@ impl Render {
         false
     }
 
-    pub fn render(&mut self, data: &[bool]) -> Result<(), wgpu::SurfaceError> {
+    pub fn render(&mut self, data: Vec<Vec<bool>>) -> Result<(), wgpu::SurfaceError> {
         let frame = self.surface.get_current_texture()?;
 
         // Buffer storing commands before being send to the GPU
@@ -122,14 +122,23 @@ impl Render {
                 label: Some("Render Encoder"),
             });
 
+        // Scale pixels to match texture
+        let v_scaling = (self.config.height as usize) / data.len();
+        let h_scaling = (self.config.width as usize) / data[0].len();
         let data: Vec<u8> = data
-            .into_iter()
-            .flat_map(|&p| {
-                if p {
-                    [255u8, 255u8, 255u8, 255u8]
-                } else {
-                    [0u8, 0u8, 0u8, 0u8]
-                }
+            .iter()
+            .flat_map(|row| {
+                let u8_row: Vec<u8> = row
+                    .iter()
+                    .flat_map(|&p| {
+                        if p {
+                            vec![255u8; 4 * h_scaling]
+                        } else {
+                            vec![0u8; 4 * h_scaling]
+                        }
+                    })
+                    .collect();
+                vec![u8_row; v_scaling].into_iter().flatten()
             })
             .collect();
 

@@ -1,3 +1,4 @@
 fn main() {
-    let _ = crab8::run();
+    let scaling_factor = 10;
+    let _ = crab8::run(scaling_factor);
 }
