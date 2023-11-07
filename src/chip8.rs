@@ -1,4 +1,4 @@
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use rand_distr::{Distribution, Normal};
 use std::{
     hint::spin_loop,
@@ -50,8 +50,8 @@ pub struct Chip8 {
     i_register: u16,
     v_registers: [u8; 16],
     stack: Vec<usize>,
-    // let mut delay_timer: u8 = 0u8;
-    // let mut sound_time: u8 = 0u8;
+    delay_timer: u8,
+    sound_timer: u8,
 }
 
 #[derive(Debug)]
@@ -83,6 +83,21 @@ impl From<&Instruction> for usize {
 
 // private method
 impl Chip8 {
+    fn compute<F>(&mut self, source: u16, other: u16, operation: F, trigger: bool)
+    where
+        F: Fn(i16, i16) -> i16,
+    {
+        let vx = self.v_registers[source as usize] as i16;
+        let vy = self.v_registers[other as usize] as i16;
+        let result = operation(vx, vy);
+
+        if (result < 0 || result > 255) && trigger {
+            self.v_registers[0xf] = !(self.v_registers[0xf] == 1) as u8;
+        }
+
+        self.v_registers[source as usize] = (result & 255i16) as u8;
+    }
+
     fn fetch(&mut self) -> Instruction {
         //fetch
         let instruction: u16 =
@@ -126,20 +141,28 @@ impl Chip8 {
             Instruction(6, x, ..) => self.v_registers[x as usize] = u8::from(instruction),
             Instruction(7, x, ..) => self.v_registers[x as usize] += u8::from(instruction),
             Instruction(8, x, y, 0) => self.v_registers[x as usize] = self.v_registers[y as usize],
-            Instruction(8, x, y, 1) => self.v_registers[x as usize] |= self.v_registers[y as usize],
-            Instruction(8, x, y, 2) => self.v_registers[x as usize] &= self.v_registers[y as usize],
-            Instruction(8, x, y, 3) => self.v_registers[x as usize] ^= self.v_registers[y as usize],
+            Instruction(8, x, y, 1) => self.compute(x, y, |u, v| u | v, false),
+            Instruction(8, x, y, 2) => self.compute(x, y, |u, v| u & v, false),
+            Instruction(8, x, y, 3) => self.compute(x, y, |u, v| u ^ v, false),
             Instruction(8, x, y, 4) => {
-                let result =
-                    (self.v_registers[x as usize] as u16) + (self.v_registers[y as usize] as u16);
-                self.v_registers[0xf as usize] = (result > 255) as u8;
-                self.v_registers[x as usize] = (result & 255) as u8;
+                self.v_registers[0xf] = 0;
+                self.compute(x, y, |u, v| u + v, true);
             }
-            Instruction(8, x, y, 5 | 7) => {
-                self.v_registers[x as usize] = self.v_registers[y as usize]
+            Instruction(8, x, y, 5) => {
+                self.v_registers[0xf] = 1;
+                self.compute(x, y, |u, v| u - v, true);
             }
-            Instruction(8, x, y, 6 | 0xe) => {
-                self.v_registers[x as usize] = self.v_registers[y as usize]
+            Instruction(8, x, .., 6) => {
+                self.v_registers[0xf] = self.v_registers[x as usize] & 1u8;
+                self.v_registers[x as usize] >>= 1;
+            }
+            Instruction(8, x, y, 7) => {
+                self.v_registers[0xf] = 1;
+                self.compute(x, y, |u, v| v - u, true);
+            }
+            Instruction(8, x, .., 0xe) => {
+                self.v_registers[0xf] = self.v_registers[x as usize] & 128u8;
+                self.v_registers[x as usize] <<= 1;
             }
             Instruction(9, x, y, ..) => {
                 if self.v_registers[x as usize] != self.v_registers[y as usize] {
@@ -147,7 +170,37 @@ impl Chip8 {
                 }
             }
             Instruction(0xa, ..) => self.i_register = u16::from(instruction),
+            Instruction(0xb, ..) => {
+                self.pc = (u16::from(instruction) + (self.v_registers[0] as u16)) as usize
+            }
+            Instruction(0xc, x, ..) => {
+                let mut rng = rand::thread_rng();
+                self.v_registers[x as usize] = rng.gen::<u8>() & u8::from(instruction);
+            }
             Instruction(0xd, x, y, n) => self.draw(x, y, n),
+            Instruction(0xe, _x, 9, 0xe) => todo!(), // skip if key pressed
+            Instruction(0xe, _x, 0xa, 1) => todo!(), // skip if key not pressed
+            Instruction(0xf, x, 0, 7) => self.v_registers[x as usize] = self.delay_timer,
+            Instruction(0xf, x, 1, 5) => self.delay_timer = self.v_registers[x as usize],
+            Instruction(0xf, x, 1, 8) => self.sound_timer = self.v_registers[x as usize],
+            Instruction(0xf, x, 1, 0xe) => {
+                let result = self.i_register + (self.v_registers[x as usize] as u16);
+                self.v_registers[0xf] = (result > 0x0fff) as u8;
+                self.i_register = result & 0xfff;
+            }
+            Instruction(0xf, x, 0, 0xa) => todo!(), // Freeze until key pressed
+            Instruction(0xf, x, 2, 9) => {
+                self.i_register = (FONT_OFFSET as u16) + 5 * (self.v_registers[x as usize] as u16)
+            }
+            Instruction(0xf, x, 3, 3) => {
+                let vx: u8 = self.v_registers[x as usize];
+                for i in 0..3u32 {
+                    self.memory[(self.i_register + (i as u16)) as usize] =
+                        (vx % 10u8.pow(3 - i)) / 10u8.pow(2 - i);
+                }
+            }
+            Instruction(0xf, x, 5, 5) => todo!(),
+            Instruction(0xf, x, 6, 5) => todo!(),
             _ => panic!("Unknow instruction {:?}", instruction),
         };
     }
@@ -193,8 +246,8 @@ impl Chip8 {
             i_register: 0u16,
             v_registers: [0u8; 16],
             stack: vec![],
-            // let mut delay_timer: u8 = 0u8;
-            // let mut sound_time: u8 = 0u8;
+            delay_timer: 0u8,
+            sound_timer: 0u8,
         }
     }
 
