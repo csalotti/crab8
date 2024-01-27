@@ -1,7 +1,9 @@
 mod chip8;
 mod render;
 
-use chip8::{Chip8, IBM_LOGO, W_HEIGHT, W_WIDTH};
+use std::fs;
+
+use chip8::{Chip8, W_HEIGHT, W_WIDTH};
 use render::Render;
 use winit::{
     dpi::PhysicalSize,
@@ -11,7 +13,7 @@ use winit::{
     window::WindowBuilder,
 };
 
-pub fn run(scaling_factor: usize) -> Result<(), impl std::error::Error> {
+pub fn run(scaling_factor: usize, rom_path: &str) {
     let (w_height, w_width) = (
         (W_HEIGHT * scaling_factor) as u32,
         (W_WIDTH * scaling_factor) as u32,
@@ -28,9 +30,9 @@ pub fn run(scaling_factor: usize) -> Result<(), impl std::error::Error> {
     let mut chip = Chip8::new();
     let mut render = pollster::block_on(Render::new(window));
 
-    chip.load(&IBM_LOGO);
+    chip.load(&fs::read(rom_path).unwrap());
 
-    event_loop.run(move |event, elwt| {
+    let _ = event_loop.run(move |event, elwt| {
         match event {
             Event::WindowEvent { event, window_id } if window_id == render.window().id() => {
                 if !render.input(&event) {
@@ -65,6 +67,15 @@ pub fn run(scaling_factor: usize) -> Result<(), impl std::error::Error> {
                                 height: (scale_factor * f64::from(inner_size.height)) as u32,
                             });
                         }
+                        WindowEvent::KeyboardInput {
+                            event:
+                                KeyEvent {
+                                    logical_key: Key::Character(key),
+                                    state,
+                                    ..
+                                },
+                            ..
+                        } => chip.update_key_states(key.as_str(), state),
                         _ => (),
                     }
                 }
@@ -79,5 +90,5 @@ pub fn run(scaling_factor: usize) -> Result<(), impl std::error::Error> {
         if chip.step() == chip8::Target::Pixels {
             render.window().request_redraw();
         }
-    })
+    });
 }

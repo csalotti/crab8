@@ -3,7 +3,9 @@ use rand_distr::{Distribution, Normal};
 use std::{
     hint::spin_loop,
     time::{Duration, Instant},
+    usize,
 };
+use winit::event::ElementState;
 
 const FONT: [u8; 80] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -24,23 +26,20 @@ const FONT: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-pub const IBM_LOGO: [u8; 132] = [
-    0x00, 0xe0, 0xa2, 0x2a, 0x60, 0x0c, 0x61, 0x08, 0xd0, 0x1f, 0x70, 0x09, 0xa2, 0x39, 0xd0, 0x1f,
-    0xa2, 0x48, 0x70, 0x08, 0xd0, 0x1f, 0x70, 0x04, 0xa2, 0x57, 0xd0, 0x1f, 0x70, 0x08, 0xa2, 0x66,
-    0xd0, 0x1f, 0x70, 0x08, 0xa2, 0x75, 0xd0, 0x1f, 0x12, 0x28, 0xff, 0x00, 0xff, 0x00, 0x3c, 0x00,
-    0x3c, 0x00, 0x3c, 0x00, 0x3c, 0x00, 0xff, 0x00, 0xff, 0xff, 0x00, 0xff, 0x00, 0x38, 0x00, 0x3f,
-    0x00, 0x3f, 0x00, 0x38, 0x00, 0xff, 0x00, 0xff, 0x80, 0x00, 0xe0, 0x00, 0xe0, 0x00, 0x80, 0x00,
-    0x80, 0x00, 0xe0, 0x00, 0xe0, 0x00, 0x80, 0xf8, 0x00, 0xfc, 0x00, 0x3e, 0x00, 0x3f, 0x00, 0x3b,
-    0x00, 0x39, 0x00, 0xf8, 0x00, 0xf8, 0x03, 0x00, 0x07, 0x00, 0x0f, 0x00, 0xbf, 0x00, 0xfb, 0x00,
-    0xf3, 0x00, 0xe3, 0x00, 0x43, 0xe0, 0x00, 0xe0, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80, 0x00, 0x80,
-    0x00, 0xe0, 0x00, 0xe0,
-];
 pub const W_HEIGHT: usize = 32;
 pub const W_WIDTH: usize = 64;
 
 const MEMORY_SIZE: usize = 4096;
 const FONT_OFFSET: usize = 0x050;
 const LOAD_START: usize = 0x200;
+
+const DEFAULT_KEYS: &str = "1234qwerasdfzxcv";
+
+#[derive(Clone, Copy, Debug)]
+enum KeyState {
+    Idle,
+    Pressed,
+}
 
 #[derive(Debug)]
 pub struct Chip8 {
@@ -52,6 +51,8 @@ pub struct Chip8 {
     stack: Vec<usize>,
     delay_timer: u8,
     sound_timer: u8,
+    keys: String,
+    keys_states: [KeyState; 16],
 }
 
 #[derive(Debug)]
@@ -139,7 +140,11 @@ impl Chip8 {
                 }
             }
             Instruction(6, x, ..) => self.v_registers[x as usize] = u8::from(instruction),
-            Instruction(7, x, ..) => self.v_registers[x as usize] += u8::from(instruction),
+            Instruction(7, x, ..) => {
+                self.v_registers[x as usize] = (((self.v_registers[x as usize] as u16)
+                    + u16::from(instruction))
+                    & 255u16) as u8
+            }
             Instruction(8, x, y, 0) => self.v_registers[x as usize] = self.v_registers[y as usize],
             Instruction(8, x, y, 1) => self.compute(x, y, |u, v| u | v, false),
             Instruction(8, x, y, 2) => self.compute(x, y, |u, v| u & v, false),
@@ -178,8 +183,16 @@ impl Chip8 {
                 self.v_registers[x as usize] = rng.gen::<u8>() & u8::from(instruction);
             }
             Instruction(0xd, x, y, n) => self.draw(x, y, n),
-            Instruction(0xe, _x, 9, 0xe) => todo!(), // skip if key pressed
-            Instruction(0xe, _x, 0xa, 1) => todo!(), // skip if key not pressed
+            Instruction(0xe, x, 9, 0xe) => {
+                if let KeyState::Pressed = self.keys_states[x as usize] {
+                    self.pc += 2;
+                }
+            }
+            Instruction(0xe, x, 0xa, 1) => {
+                if let KeyState::Idle = self.keys_states[x as usize] {
+                    self.pc += 2;
+                }
+            }
             Instruction(0xf, x, 0, 7) => self.v_registers[x as usize] = self.delay_timer,
             Instruction(0xf, x, 1, 5) => self.delay_timer = self.v_registers[x as usize],
             Instruction(0xf, x, 1, 8) => self.sound_timer = self.v_registers[x as usize],
@@ -188,19 +201,31 @@ impl Chip8 {
                 self.v_registers[0xf] = (result > 0x0fff) as u8;
                 self.i_register = result & 0xfff;
             }
-            Instruction(0xf, x, 0, 0xa) => todo!(), // Freeze until key pressed
+            Instruction(0xf, x, 0, 0xa) => {
+                if let KeyState::Idle = self.keys_states[x as usize] {
+                    self.pc -= 2
+                }
+            } // Freeze until key pressed
             Instruction(0xf, x, 2, 9) => {
                 self.i_register = (FONT_OFFSET as u16) + 5 * (self.v_registers[x as usize] as u16)
             }
             Instruction(0xf, x, 3, 3) => {
-                let vx: u8 = self.v_registers[x as usize];
+                let vx: u16 = self.v_registers[x as usize] as u16;
                 for i in 0..3u32 {
                     self.memory[(self.i_register + (i as u16)) as usize] =
-                        (vx % 10u8.pow(3 - i)) / 10u8.pow(2 - i);
+                        (((vx % 10u16.pow(3 - i)) / 10u16.pow(2 - i)) & 255u16) as u8;
                 }
             }
-            Instruction(0xf, x, 5, 5) => todo!(),
-            Instruction(0xf, x, 6, 5) => todo!(),
+            Instruction(0xf, x, 5, 5) => {
+                for i in 0..=x {
+                    self.memory[(self.i_register + i) as usize] = self.v_registers[i as usize]
+                }
+            }
+            Instruction(0xf, x, 6, 5) => {
+                for i in 0..=x {
+                    self.v_registers[i as usize] = self.memory[(self.i_register + i) as usize]
+                }
+            }
             _ => panic!("Unknow instruction {:?}", instruction),
         };
     }
@@ -238,7 +263,6 @@ impl Chip8 {
         for (pos, &b) in FONT.iter().enumerate() {
             memory[FONT_OFFSET + pos] = b;
         }
-
         Self {
             memory,
             pixels: [[false; W_WIDTH]; W_HEIGHT],
@@ -248,6 +272,8 @@ impl Chip8 {
             stack: vec![],
             delay_timer: 0u8,
             sound_timer: 0u8,
+            keys: DEFAULT_KEYS.to_string(),
+            keys_states: [KeyState::Idle; 16],
         }
     }
 
@@ -264,11 +290,22 @@ impl Chip8 {
         }
     }
 
+    pub fn update_key_states(&mut self, key: &str, state: ElementState) {
+        if self.keys.contains(key) {
+            let key_idx: usize = self.keys.find(key).unwrap();
+            match state {
+                ElementState::Pressed => self.keys_states[key_idx] = KeyState::Pressed,
+                ElementState::Released => self.keys_states[key_idx] = KeyState::Idle,
+            }
+        }
+    }
+
     pub fn step(&mut self) -> Target {
         let start = Instant::now();
         let instruction = self.fetch();
         let _ = self.execute(&instruction);
 
+        // Expected time wait depending on the instruction
         let mut rng = thread_rng();
         let interval_dist = match instruction {
             Instruction(0, 0, 0xe, 0) => Normal::new(109.0, 0.0).unwrap(),
@@ -298,10 +335,10 @@ impl Chip8 {
             _ => panic!("Unknow Instruction {:?}", instruction),
         };
 
-        let interval = Duration::from_micros(interval_dist.sample(&mut rng) as u64);
-        while start.elapsed() < interval {
-            spin_loop()
-        }
+        //let interval = Duration::from_micros(interval_dist.sample(&mut rng) as u64);
+        //while start.elapsed() < interval {
+        //    spin_loop()
+        //}
 
         match instruction {
             Instruction(0xd, ..) | Instruction(0, 0, 0xe, 0) => Target::Pixels,
